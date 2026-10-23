@@ -12,10 +12,13 @@ Automata Studio is a static, interactive learning tool for Theory of Computation
 - Thompson's Construction with visible epsilon (`ε`) transitions.
 - Epsilon closure and subset construction with deterministic, stable DFA identifiers.
 - DFA minimization that removes unreachable states and merges equivalent states.
-- Interactive left-to-right Cytoscape/Dagre diagrams with pan, zoom, fit, centering, layout reset, selection, and outgoing-edge highlighting.
-- NFA/DFA/minimized-DFA tabs, transition tables, state inspector, string simulator, and an educational conversion-step panel.
+- Interactive left-to-right Cytoscape/Dagre diagrams with a start arrow, pan, zoom, fit, re-layout, and click-to-inspect states.
+- A pipeline rail (regex → ε-NFA → DFA → minimal DFA) that doubles as the graph switcher.
+- String simulator on every graph: on the NFA it tracks the whole set of active states; on DFAs it follows the single path. The current state is highlighted on the graph and in the table.
+- Transition tables, and a "How it's built" panel with the parse tree, ε-closures, subset mapping, and every partition-refinement pass of minimization.
+- Light ("drafting paper") and dark ("blueprint") themes.
 - PNG graph export and JSON automaton export.
-- Responsive, keyboard-accessible UI with accessible labels and focus states.
+- Responsive, keyboard-accessible UI with visible focus states.
 
 ## Technology
 
@@ -47,13 +50,13 @@ The UI consumes the single `convertRegexToAutomata` pipeline and never implement
 
 ## Supported syntax
 
-| Form                         | Meaning        |
-| ---------------------------- | -------------- |
-| `a`, `b`, `0`, `1`, `_`, `-` | Literal symbol |
-| `a                           | b`             | Union               |
-| `ab` or `a.b`                | Concatenation  |
-| `a*`                         | Kleene star    |
-| `(a                          | b)*`           | Parenthesized group |
+| Form                         | Meaning             |
+| ---------------------------- | ------------------- |
+| `a`, `b`, `0`, `1`, `_`, `-` | Literal symbol      |
+| `a\|b`                       | Union               |
+| `ab` or `a.b`                | Concatenation       |
+| `a*`                         | Kleene star         |
+| `(a\|b)*`                    | Parenthesized group |
 
 Expressions use single-character literals. Whitespace inside an expression is not supported.
 

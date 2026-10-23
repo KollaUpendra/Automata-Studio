@@ -1,400 +1,281 @@
 /**
- * Automata Studio — Production Step Breakdown Panel (Light Theme)
- * Educational log showing intermediate algorithmic outputs:
- * 1. AST Representation & Postfix (RPN)
- * 2. ε-Closure Sets & Subset Construction Powersets
- * 3. DFA Equivalence Partition Passes (Hopcroft Minimization)
+ * StepBreakdown — how the expression became each machine:
+ * pipeline overview, parsing (postfix + AST), subset construction and minimization rounds.
  */
 
-import React, { useState, useMemo } from 'react';
-import {
-  Network,
-  Layers,
-  Cpu,
-  ArrowRight,
-  ListTree,
-} from 'lucide-react';
-import type { ConversionResult, ConversionStep } from '../../engine/pipeline';
+import { useMemo, useState } from 'react';
+import type { ConversionResult, ConversionSuccess } from '../../engine/pipeline';
 import type { RegexNode } from '../../engine/parser/ast';
-import type { NFA } from '../../engine/nfa/types';
-import type { DFA } from '../../engine/dfa/types';
 import { epsilonClosure } from '../../engine/nfa/epsilonClosure';
 
-interface StepBreakdownProps {
-  result: ConversionResult | null;
-}
+type Section = 'overview' | 'parse' | 'subsets' | 'minimize';
 
-export const StepBreakdown: React.FC<StepBreakdownProps> = ({ result }) => {
-  const [activeSection, setActiveSection] = useState<'ast' | 'closure' | 'partitions' | 'steps'>('closure');
+const SECTIONS: Array<{ id: Section; label: string }> = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'parse', label: 'Parsing' },
+  { id: 'subsets', label: 'Subset construction' },
+  { id: 'minimize', label: 'Minimization' },
+];
+
+export function StepBreakdown({ result }: { result: ConversionResult | null }) {
+  const [section, setSection] = useState<Section>('overview');
 
   if (!result || !result.success) {
     return (
-      <div className="p-8 text-center text-slate-400 font-mono text-xs">
-        Compile a regular expression to inspect intermediate algorithmic transformations.
-      </div>
+      <div className="panel__empty">Build an expression to see how each machine is derived.</div>
     );
   }
 
-  const { ast, postfix, withConcat, regex, nfa, dfa, minimizedDfa, steps } = result;
-
   return (
-    <div className="flex flex-col h-full overflow-hidden select-none bg-white">
-      {/* ─── Top Sub-Tab Navigation ─── */}
-      <div className="p-2 border-b border-slate-200 bg-slate-50 flex items-center gap-1 overflow-x-auto flex-shrink-0">
-        {[
-          { id: 'closure' as const, label: 'ε-Closures & Subsets', icon: Network },
-          { id: 'partitions' as const, label: 'DFA Partitions', icon: Layers },
-          { id: 'ast' as const, label: 'AST & Postfix', icon: ListTree },
-          { id: 'steps' as const, label: 'Pipeline Steps', icon: Cpu },
-        ].map(({ id, label, icon: Icon }) => (
+    <div className="panel">
+      <div className="subtabs" role="group" aria-label="Topic">
+        {SECTIONS.map((s) => (
           <button
-            key={id}
+            key={s.id}
             type="button"
-            onClick={() => setActiveSection(id)}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium whitespace-nowrap transition-colors ${
-              activeSection === id
-                ? 'bg-white text-indigo-700 border border-slate-200 shadow-xs font-semibold'
-                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
-            }`}
+            aria-pressed={section === s.id}
+            onClick={() => setSection(s.id)}
           >
-            <Icon className="w-3.5 h-3.5" />
-            <span>{label}</span>
+            {s.label}
           </button>
         ))}
       </div>
-
-      {/* ─── Section Content ─── */}
-      <div className="flex-1 overflow-y-auto p-4 select-text">
-        {activeSection === 'closure' && <EpsilonClosureSection nfa={nfa} dfa={dfa} />}
-        {activeSection === 'partitions' && <PartitionPassesSection dfa={dfa} minimizedDfa={minimizedDfa} />}
-        {activeSection === 'ast' && <ASTSection ast={ast} postfix={postfix} withConcat={withConcat} regex={regex} />}
-        {activeSection === 'steps' && <PipelineStepsSection steps={steps} />}
-      </div>
-    </div>
-  );
-};
-
-// ---------------------------------------------------------------------------
-// 1. ε-Closure & Subset Construction Powersets
-// ---------------------------------------------------------------------------
-
-function EpsilonClosureSection({ nfa, dfa }: { nfa: NFA; dfa: DFA }) {
-  const singleClosures = useMemo(() => {
-    return nfa.states.map((s) => {
-      const closure = Array.from(epsilonClosure(new Set([s.id]), nfa)).sort((a, b) => a - b);
-      return {
-        stateId: s.id,
-        closure,
-      };
-    });
-  }, [nfa]);
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-800">
-          NFA State ε-Closures
-        </h4>
-        <p className="text-[11px] text-slate-500 mt-0.5">
-          For each NFA state <span className="font-mono text-slate-700 font-semibold">s</span>, the set of all states reachable solely by traversing ε-transitions:
-        </p>
-      </div>
-
-      <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
-        <table className="w-full text-xs font-mono">
-          <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 text-[11px]">
-            <tr>
-              <th className="py-1.5 px-3 text-left w-20">NFA State</th>
-              <th className="py-1.5 px-3 text-left">ε-closure(s)</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {singleClosures.map(({ stateId, closure }) => (
-              <tr key={stateId} className="hover:bg-slate-50">
-                <td className="py-1.5 px-3 text-sky-700 font-semibold">q{stateId}</td>
-                <td className="py-1.5 px-3 text-slate-800">
-                  {'{' + closure.map((id) => `q${id}`).join(', ') + '}'}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-
-      <div className="pt-2">
-        <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-800">
-          Subset Construction (DFA State Mappings)
-        </h4>
-        <p className="text-[11px] text-slate-500 mt-0.5">
-          Each DFA state corresponds to an immutable subset of NFA states:
-        </p>
-      </div>
-
-      <div className="space-y-2">
-        {dfa.states.map((ds) => {
-          const nfaList = Array.from(ds.nfaStates).sort((a, b) => a - b);
-          return (
-            <div
-              key={ds.id}
-              className="p-2.5 rounded-lg border border-slate-200 bg-slate-50/80 flex items-start justify-between gap-3 font-mono text-xs"
-            >
-              <div className="flex items-center gap-2">
-                <span className="font-bold text-indigo-700">{ds.id}</span>
-                {ds.isStart && (
-                  <span className="text-[10px] text-sky-700 bg-sky-50 border border-sky-200 px-1 py-0.2 rounded font-sans font-semibold">
-                    Start
-                  </span>
-                )}
-                {ds.isAccepting && (
-                  <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 py-0.2 rounded font-sans font-semibold">
-                    Accepting
-                  </span>
-                )}
-              </div>
-              <div className="text-slate-600 text-right">
-                <span className="text-slate-400">Representing: </span>
-                <span className="text-slate-800 font-semibold">
-                  {'{' + nfaList.map((id) => `q${id}`).join(', ') + '}'}
-                </span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      {section === 'overview' && <Overview result={result} />}
+      {section === 'parse' && <Parsing result={result} />}
+      {section === 'subsets' && <Subsets result={result} />}
+      {section === 'minimize' && <Minimization result={result} />}
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// 2. DFA Minimization Partition Refinement Passes (Hopcroft)
-// ---------------------------------------------------------------------------
-
-function PartitionPassesSection({ dfa, minimizedDfa }: { dfa: DFA; minimizedDfa: DFA }) {
-  const partitionHistory = useMemo(() => {
-    const alphabet = [...dfa.alphabet].sort();
-    const accepting = dfa.states.filter((s) => s.isAccepting).map((s) => s.id);
-    const nonAccepting = dfa.states.filter((s) => !s.isAccepting).map((s) => s.id);
-
-    // Initial partition P0
-    const p0: Array<{ label: string; states: string[] }> = [];
-    if (nonAccepting.length > 0) p0.push({ label: 'Non-Accepting (Q \\ F)', states: nonAccepting });
-    if (accepting.length > 0) p0.push({ label: 'Accepting (F)', states: accepting });
-
-    return {
-      alphabet,
-      p0,
-      reduction: {
-        originalStates: dfa.states.length,
-        minimizedStates: minimizedDfa.states.length,
-        mergedCount: dfa.states.length - minimizedDfa.states.length,
-      },
-    };
-  }, [dfa, minimizedDfa]);
-
+function Overview({ result }: { result: ConversionSuccess }) {
   return (
-    <div className="space-y-4">
-      <div>
-        <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-800">
-          Hopcroft DFA Equivalence Partitions
-        </h4>
-        <p className="text-[11px] text-slate-500 mt-0.5">
-          Minimization refines state partitions by distinguishing states based on output behaviors:
-        </p>
-      </div>
-
-      {/* Reduction summary banner */}
-      <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-center justify-between text-xs font-mono">
-        <div>
-          <span className="text-slate-500">Original DFA: </span>
-          <span className="text-indigo-700 font-bold">{partitionHistory.reduction.originalStates} states</span>
-        </div>
-        <ArrowRight className="w-3.5 h-3.5 text-slate-400" />
-        <div>
-          <span className="text-slate-500">Minimized DFA: </span>
-          <span className="text-emerald-700 font-bold">{partitionHistory.reduction.minimizedStates} states</span>
-        </div>
-        <div className="text-[11px] px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 font-sans font-medium">
-          {partitionHistory.reduction.mergedCount > 0
-            ? `${partitionHistory.reduction.mergedCount} redundant states merged`
-            : 'Already minimal'}
-        </div>
-      </div>
-
-      {/* Step P0: 0-Equivalence */}
-      <div className="space-y-2">
-        <div className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-          <span className="w-5 h-5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-[10px] font-mono flex items-center justify-center font-bold">
-            0
-          </span>
-          <span>Initial 0-Equivalence Partition (P₀ = {'{F, Q \\ F}'})</span>
-        </div>
-
-        <div className="space-y-1.5 pl-6">
-          {partitionHistory.p0.map((group, idx) => (
-            <div key={idx} className="p-2 bg-slate-50 border border-slate-200 rounded font-mono text-xs flex items-center justify-between">
-              <span className="text-slate-600 text-[11px] font-sans">{group.label}:</span>
-              <span className="text-slate-900 font-bold">
-                {'{' + group.states.join(', ') + '}'}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Step P_Final: Canonical Minimized States */}
-      <div className="space-y-2 pt-2">
-        <div className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
-          <span className="w-5 h-5 rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-mono flex items-center justify-center font-bold">
-            *
-          </span>
-          <span>Final Merged States (Canonical Equivalence Classes)</span>
-        </div>
-
-        <div className="space-y-1.5 pl-6">
-          {minimizedDfa.states.map((ms) => (
-            <div key={ms.id} className="p-2 bg-slate-50 border border-slate-200 rounded font-mono text-xs flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="text-emerald-700 font-bold">{ms.id}</span>
-                {ms.isStart && <span className="text-[10px] text-sky-700 font-sans font-semibold">→ Start</span>}
-                {ms.isAccepting && <span className="text-[10px] text-emerald-700 font-sans font-semibold">* Accept</span>}
-              </div>
-              <span className="text-slate-500 text-[11px]">
-                Alphabet transitions: {minimizedDfa.alphabet.size}
-              </span>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
+    <ol className="timeline">
+      {result.steps.map((step) => (
+        <li key={step.name}>
+          <div className="timeline__name">{step.name}</div>
+          <div className="timeline__detail">{step.detail}</div>
+        </li>
+      ))}
+    </ol>
   );
 }
 
-// ---------------------------------------------------------------------------
-// 3. AST & Postfix (RPN)
-// ---------------------------------------------------------------------------
+// ─── Parsing ────────────────────────────────────────────────────────────────
 
-function ASTSection({
-  ast,
-  postfix,
-  withConcat,
-  regex,
-}: {
-  ast: RegexNode;
-  postfix: string;
-  withConcat: string;
-  regex: string;
-}) {
-  return (
-    <div className="space-y-4">
-      <div>
-        <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-800">
-          Grammar & Parser AST
-        </h4>
-        <p className="text-[11px] text-slate-500 mt-0.5">
-          Transformation pipeline from raw regular expression to strongly typed Abstract Syntax Tree:
-        </p>
-      </div>
-
-      <div className="space-y-2 font-mono text-xs">
-        <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg">
-          <span className="text-slate-500 text-[11px] block font-sans mb-1">1. User Infix Input:</span>
-          <span className="text-slate-900 font-bold">{regex}</span>
-        </div>
-
-        <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg">
-          <span className="text-slate-500 text-[11px] block font-sans mb-1">2. Explicit Concatenation (• inserted):</span>
-          <span className="text-amber-700 font-bold">{withConcat}</span>
-        </div>
-
-        <div className="p-2.5 bg-slate-50 border border-slate-200 rounded-lg">
-          <span className="text-slate-500 text-[11px] block font-sans mb-1">3. Postfix Notation (Shunting-yard RPN):</span>
-          <span className="text-indigo-700 font-bold">{postfix}</span>
-        </div>
-      </div>
-
-      <div className="pt-2">
-        <span className="text-xs font-semibold text-slate-800 block mb-2 uppercase tracking-wider">
-          Abstract Syntax Tree (AST Hierarchy)
-        </span>
-        <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg overflow-x-auto font-mono text-xs">
-          <ASTNodeView node={ast} depth={0} />
-        </div>
-      </div>
-    </div>
-  );
+interface TreeLine {
+  prefix: string;
+  kind: 'op' | 'lit';
+  text: string;
 }
 
-function ASTNodeView({ node, depth }: { node: RegexNode; depth: number }) {
-  const indent = '  '.repeat(depth);
-
+function treeLines(node: RegexNode, prefix = '', isLast = true, isRoot = true): TreeLine[] {
+  const branch = isRoot ? '' : isLast ? '└─ ' : '├─ ';
+  const childPrefix = isRoot ? '' : prefix + (isLast ? '   ' : '│  ');
+  const here = prefix + branch;
   switch (node.type) {
     case 'literal':
-      return (
-        <div className="text-emerald-700">
-          <span className="text-slate-400">{indent}├─ </span>
-          <span className="text-slate-600">Literal(</span>
-          <span className="text-amber-700 font-bold">&quot;{node.value}&quot;</span>
-          <span className="text-slate-600">)</span>
-        </div>
-      );
+      return [{ prefix: here, kind: 'lit', text: `'${node.value}'` }];
     case 'star':
-      return (
-        <div>
-          <div className="text-indigo-700">
-            <span className="text-slate-400">{indent}├─ </span>
-            <span className="font-bold">KleeneStar (*)</span>
-          </div>
-          <ASTNodeView node={node.child} depth={depth + 1} />
-        </div>
-      );
+      return [
+        { prefix: here, kind: 'op', text: 'star  *' },
+        ...treeLines(node.child, childPrefix, true, false),
+      ];
     case 'concat':
-      return (
-        <div>
-          <div className="text-sky-700">
-            <span className="text-slate-400">{indent}├─ </span>
-            <span className="font-bold">Concatenation (•)</span>
-          </div>
-          <ASTNodeView node={node.left} depth={depth + 1} />
-          <ASTNodeView node={node.right} depth={depth + 1} />
-        </div>
-      );
     case 'union':
-      return (
-        <div>
-          <div className="text-rose-700">
-            <span className="text-slate-400">{indent}├─ </span>
-            <span className="font-bold">Union (|)</span>
-          </div>
-          <ASTNodeView node={node.left} depth={depth + 1} />
-          <ASTNodeView node={node.right} depth={depth + 1} />
-        </div>
-      );
-    default:
-      return null;
+      return [
+        { prefix: here, kind: 'op', text: node.type === 'concat' ? 'concat  ·' : 'union  |' },
+        ...treeLines(node.left, childPrefix, false, false),
+        ...treeLines(node.right, childPrefix, true, false),
+      ];
   }
 }
 
-// ---------------------------------------------------------------------------
-// 4. Pipeline Steps Log
-// ---------------------------------------------------------------------------
-
-function PipelineStepsSection({ steps }: { steps: ConversionStep[] }) {
+function Parsing({ result }: { result: ConversionSuccess }) {
+  const lines = useMemo(() => treeLines(result.ast), [result.ast]);
   return (
-    <div className="space-y-3">
-      {steps.map((step, idx) => (
-        <div
-          key={idx}
-          className="p-3 bg-slate-50 border border-slate-200 rounded-lg flex items-start gap-3 hover:border-slate-300 transition-colors"
-        >
-          <div className="w-5 h-5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-[11px] font-mono font-bold flex items-center justify-center flex-shrink-0 mt-0.5">
-            {idx + 1}
+    <>
+      <p className="panel__intro">
+        Concatenation is made explicit with “.”, the shunting-yard algorithm reorders the expression
+        into postfix, and the postfix is folded into a syntax tree. Thompson’s construction then
+        builds one small NFA per tree node.
+      </p>
+      <div className="form-row">
+        <span className="form-row__k">As typed</span>
+        <span className="form-row__v">{result.regex}</span>
+      </div>
+      <div className="form-row">
+        <span className="form-row__k">Explicit concatenation</span>
+        <span className="form-row__v">{result.withConcat}</span>
+      </div>
+      <div className="form-row">
+        <span className="form-row__k">Postfix</span>
+        <span className="form-row__v">{result.postfix}</span>
+      </div>
+      <h3 className="h3" style={{ marginTop: '1.25rem' }}>
+        Syntax tree
+      </h3>
+      <pre className="ast" aria-label="Abstract syntax tree">
+        {lines.map((l, i) => (
+          <div key={i}>
+            <span className="branch">{l.prefix}</span>
+            <span className={l.kind}>{l.text}</span>
           </div>
-          <div className="min-w-0">
-            <div className="text-xs font-semibold text-slate-800">{step.name}</div>
-            <div className="text-[11px] text-slate-500 leading-relaxed mt-0.5">{step.detail}</div>
-          </div>
-        </div>
-      ))}
-    </div>
+        ))}
+      </pre>
+    </>
+  );
+}
+
+// ─── Subset construction ────────────────────────────────────────────────────
+
+const fmt = (ids: Iterable<number>) =>
+  `{${[...ids]
+    .sort((a, b) => a - b)
+    .map((id) => `s${id}`)
+    .join(', ')}}`;
+
+function Subsets({ result }: { result: ConversionSuccess }) {
+  const { nfa, dfa } = result;
+  const closures = useMemo(
+    () => nfa.states.map((s) => ({ id: s.id, closure: epsilonClosure(new Set([s.id]), nfa) })),
+    [nfa],
+  );
+
+  return (
+    <>
+      <p className="panel__intro">
+        Every DFA state stands for the set of NFA states the NFA could be in at the same moment. It
+        starts from ε-closure(s{nfa.startState}) and is accepting when the set contains an NFA
+        accepting state.
+      </p>
+
+      <h3 className="h3">DFA states as NFA state sets</h3>
+      <table className="kv">
+        <thead>
+          <tr>
+            <th scope="col">DFA state</th>
+            <th scope="col">NFA states</th>
+          </tr>
+        </thead>
+        <tbody>
+          {dfa.states.map((s) => (
+            <tr key={s.id}>
+              <td>
+                {s.id}
+                {s.isStart && (
+                  <span className="tag tag--start" style={{ marginLeft: 6 }}>
+                    start
+                  </span>
+                )}
+                {s.isAccepting && (
+                  <span className="tag tag--accept" style={{ marginLeft: 6 }}>
+                    accept
+                  </span>
+                )}
+              </td>
+              <td>{fmt(s.nfaStates)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <h3 className="h3">ε-closure of each NFA state</h3>
+      <table className="kv">
+        <thead>
+          <tr>
+            <th scope="col">State</th>
+            <th scope="col">Reachable by ε-moves alone</th>
+          </tr>
+        </thead>
+        <tbody>
+          {closures.map(({ id, closure }) => (
+            <tr key={id}>
+              <td>s{id}</td>
+              <td>{fmt(closure)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
+// ─── Minimization ───────────────────────────────────────────────────────────
+
+function Minimization({ result }: { result: ConversionSuccess }) {
+  const { dfa, minimizedDfa, minimization } = result;
+  const merged = dfa.states.length - minimizedDfa.states.length;
+  const accepting = new Set(dfa.acceptStates);
+
+  return (
+    <>
+      <p className="panel__intro">
+        States are first split into accepting and non-accepting groups. Each pass then splits any
+        group whose members send some symbol into different groups. When a pass changes nothing,
+        each remaining group becomes one state of the minimal DFA.
+      </p>
+      <p className="summary-line">
+        <strong>
+          {dfa.states.length} → {minimizedDfa.states.length} states
+        </strong>
+        {merged > 0
+          ? `: ${merged} redundant state${merged === 1 ? '' : 's'} merged.`
+          : ': the DFA was already minimal.'}
+        {minimization.unreachable.length > 0 &&
+          ` Removed unreachable: ${minimization.unreachable.join(', ')}.`}
+      </p>
+
+      <ol className="rounds">
+        {minimization.rounds.map((round, i) => (
+          <li key={i}>
+            <div className="round__label">
+              {i === 0 ? 'Start: accepting vs. non-accepting' : `Pass ${i}`}, {round.length} group
+              {round.length === 1 ? '' : 's'}
+            </div>
+            <div className="blocks">
+              {round.map((group) => (
+                <span
+                  key={group.join()}
+                  className={`block ${accepting.has(group[0]) ? 'block--accept' : ''}`}
+                >
+                  {`{${group.join(', ')}}`}
+                </span>
+              ))}
+            </div>
+          </li>
+        ))}
+      </ol>
+
+      <h3 className="h3">Minimal DFA states</h3>
+      <table className="kv">
+        <thead>
+          <tr>
+            <th scope="col">State</th>
+            <th scope="col">Merges these DFA states</th>
+          </tr>
+        </thead>
+        <tbody>
+          {minimizedDfa.states.map((s) => (
+            <tr key={s.id}>
+              <td>
+                {s.id}
+                {s.isStart && (
+                  <span className="tag tag--start" style={{ marginLeft: 6 }}>
+                    start
+                  </span>
+                )}
+                {s.isAccepting && (
+                  <span className="tag tag--accept" style={{ marginLeft: 6 }}>
+                    accept
+                  </span>
+                )}
+              </td>
+              <td>{`{${(minimization.classes.get(s.id) ?? []).join(', ')}}`}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
   );
 }

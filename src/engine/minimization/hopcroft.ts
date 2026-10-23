@@ -81,6 +81,30 @@ function splitPartition(
  * @returns   A new, equivalent, minimized DFA
  */
 export function minimizeDfa(dfa: DFA): DFA {
+  return minimizeDfaWithTrace(dfa).dfa;
+}
+
+/**
+ * Result of minimization including the partition-refinement history,
+ * used by the UI to explain how equivalence classes were formed.
+ */
+export interface MinimizationTrace {
+  readonly dfa: DFA;
+  /** rounds[0] is the initial {F, Q \ F} split; each later entry is one refinement pass. */
+  readonly rounds: ReadonlyArray<ReadonlyArray<ReadonlyArray<string>>>;
+  /** Minimized state ID → the original DFA state IDs merged into it. */
+  readonly classes: ReadonlyMap<string, ReadonlyArray<string>>;
+  /** Original DFA states removed because they are unreachable from the start state. */
+  readonly unreachable: ReadonlyArray<string>;
+}
+
+const snapshot = (parts: ReadonlyArray<ReadonlySet<string>>): string[][] =>
+  parts.map((p) => [...p].sort());
+
+/**
+ * Minimizes a DFA and records every partition-refinement pass.
+ */
+export function minimizeDfaWithTrace(dfa: DFA): MinimizationTrace {
   // Step 1: Remove unreachable states
   const reachable = reachableStates(dfa);
   const reachableStateList = dfa.states.filter((s) => reachable.has(s.id));
@@ -120,6 +144,8 @@ export function minimizeDfa(dfa: DFA): DFA {
     partitions = [new Set(reachableStateList.map((s) => s.id))];
   }
 
+  const rounds: string[][][] = [snapshot(partitions)];
+
   // Step 3: Refine partitions using Hopcroft's algorithm
   let changed = true;
   while (changed) {
@@ -149,6 +175,7 @@ export function minimizeDfa(dfa: DFA): DFA {
       changed = true;
     }
     partitions = newPartitions;
+    if (changed) rounds.push(snapshot(partitions));
   }
 
   // Step 4: Build the minimized DFA
@@ -236,11 +263,19 @@ export function minimizeDfa(dfa: DFA): DFA {
     return aNum - bNum;
   });
 
+  const classes = new Map<string, string[]>();
+  partitions.forEach((p, i) => classes.set(`m${i}`, [...p].sort()));
+
   return {
-    states: minStateList,
-    transitions: minTransitions,
-    startState: `m0`,
-    acceptStates: minAcceptStates,
-    alphabet: dfa.alphabet,
+    dfa: {
+      states: minStateList,
+      transitions: minTransitions,
+      startState: `m0`,
+      acceptStates: minAcceptStates,
+      alphabet: dfa.alphabet,
+    },
+    rounds,
+    classes,
+    unreachable: dfa.states.filter((st) => !reachable.has(st.id)).map((st) => st.id),
   };
 }

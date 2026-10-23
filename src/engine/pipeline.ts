@@ -9,7 +9,7 @@ import { validateRegex, type ValidationResult } from './validation/validateRegex
 import { parseRegex } from './parser/parser';
 import { thompsonConstruct } from './nfa/thompson';
 import { nfaToDfa } from './dfa/subsetConstruction';
-import { minimizeDfa } from './minimization/hopcroft';
+import { minimizeDfaWithTrace, type MinimizationTrace } from './minimization/hopcroft';
 import type { RegexNode } from './parser/ast';
 import type { NFA } from './nfa/types';
 import type { DFA } from './dfa/types';
@@ -33,6 +33,8 @@ export interface ConversionSuccess {
   readonly nfa: NFA;
   readonly dfa: DFA;
   readonly minimizedDfa: DFA;
+  /** Partition-refinement history and equivalence classes from minimization */
+  readonly minimization: MinimizationTrace;
   readonly steps: ConversionStep[];
   readonly errors: [];
 }
@@ -110,9 +112,9 @@ export function convertRegexToAutomata(regex: string): ConversionResult {
   }
 
   // Step 7: DFA Minimization (Hopcroft's Algorithm)
-  let minimizedDfa: DFA;
+  let minimization: MinimizationTrace;
   try {
-    minimizedDfa = minimizeDfa(dfa);
+    minimization = minimizeDfaWithTrace(dfa);
   } catch (e) {
     return {
       success: false,
@@ -120,6 +122,8 @@ export function convertRegexToAutomata(regex: string): ConversionResult {
       errors: [`DFA minimization failed: ${e instanceof Error ? e.message : String(e)}`],
     };
   }
+
+  const minimizedDfa = minimization.dfa;
 
   // Build educational steps
   const steps: ConversionStep[] = [
@@ -156,7 +160,7 @@ export function convertRegexToAutomata(regex: string): ConversionResult {
     {
       name: 'DFA Minimization',
       description: 'Equivalent states were merged.',
-      detail: `Hopcroft's algorithm reduced the DFA from ${dfa.states.length} to ${minimizedDfa.states.length} states by merging equivalent partitions.`,
+      detail: `Partition refinement reduced the DFA from ${dfa.states.length} to ${minimizedDfa.states.length} states in ${minimization.rounds.length - 1} refinement pass${minimization.rounds.length - 1 === 1 ? '' : 'es'}.`,
     },
   ];
 
@@ -169,6 +173,7 @@ export function convertRegexToAutomata(regex: string): ConversionResult {
     nfa,
     dfa,
     minimizedDfa,
+    minimization,
     steps,
     errors: [],
   };

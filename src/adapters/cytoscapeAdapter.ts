@@ -35,6 +35,12 @@ export interface CytoscapeNode {
 
 export interface CytoscapeEdge {
   data: CytoscapeEdgeData;
+  classes?: string;
+}
+
+/** Type guard: true when the element is an edge (has source/target). */
+export function isEdge(el: CytoscapeElement): el is CytoscapeEdge {
+  return 'source' in el.data;
 }
 
 export type CytoscapeElement = CytoscapeNode | CytoscapeEdge;
@@ -65,7 +71,12 @@ export function dfaToCytoscapeElements(dfa: DFA): CytoscapeElement[] {
     if (state.isAccepting) classes.push('accepting');
 
     const nfaStatesStr =
-      state.nfaStates.size > 0 ? `{${[...state.nfaStates].sort((a, b) => a - b).join(', ')}}` : '';
+      state.nfaStates.size > 0
+        ? `{${[...state.nfaStates]
+            .sort((a, b) => a - b)
+            .map((n) => `s${n}`)
+            .join(', ')}}`
+        : '';
 
     elements.push({
       data: {
@@ -172,6 +183,7 @@ export function nfaToCytoscapeElements(nfa: NFA): CytoscapeElement[] {
     });
     const label = sortedSymbols.join(', ');
     const edgeId = `nfa-${source}-${target}-${sortedSymbols.join('-')}`;
+    const epsilonOnly = sortedSymbols.length === 1 && sortedSymbols[0] === 'ε';
 
     elements.push({
       data: {
@@ -180,6 +192,7 @@ export function nfaToCytoscapeElements(nfa: NFA): CytoscapeElement[] {
         target,
         label,
       },
+      classes: epsilonOnly ? 'epsilon' : undefined,
     });
   }
 

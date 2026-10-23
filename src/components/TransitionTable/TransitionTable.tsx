@@ -1,10 +1,9 @@
 /**
- * Automata Studio — Production Transition Matrix Component (Light Theme)
- * Clean tabular matrix displaying state transitions δ(q, σ), start state indicators, and accepting states.
+ * TransitionTable — δ(q, σ) for the automaton on screen.
+ * Rows are clickable and select the same state on the graph.
  */
 
-import React, { useState, useMemo } from 'react';
-import { Table2, Search, ArrowRight, Asterisk } from 'lucide-react';
+import { useMemo, useState } from 'react';
 import type { DFA } from '../../engine/dfa/types';
 import type { NFA } from '../../engine/nfa/types';
 import type { ActiveTab } from '../../types';
@@ -14,291 +13,159 @@ interface TransitionTableProps {
   nfa: NFA | null;
   dfa: DFA | null;
   minimizedDfa: DFA | null;
-  selectedStateId?: string | null;
-  onSelectState?: (stateId: string) => void;
+  selectedStateId: string | null;
+  activeStateIds: readonly string[];
+  onSelectState: (stateId: string) => void;
 }
 
-export const TransitionTable: React.FC<TransitionTableProps> = ({
+interface Row {
+  id: string; // graph node id
+  label: string;
+  isStart: boolean;
+  isAccepting: boolean;
+  cells: string[][]; // target labels per column
+}
+
+function buildRows(tab: ActiveTab, nfa: NFA | null, dfa: DFA | null, min: DFA | null) {
+  if (tab === 'nfa') {
+    if (!nfa) return null;
+    const columns = [...[...nfa.alphabet].sort(), 'ε'];
+    const rows: Row[] = nfa.states.map((s) => ({
+      id: String(s.id),
+      label: `s${s.id}`,
+      isStart: s.id === nfa.startState,
+      isAccepting: nfa.acceptStates.has(s.id),
+      cells: columns.map((col) =>
+        nfa.transitions
+          .filter((t) => t.from === s.id && (t.symbol ?? 'ε') === col)
+          .map((t) => t.to)
+          .sort((a, b) => a - b)
+          .map((to) => `s${to}`),
+      ),
+    }));
+    return { columns, rows };
+  }
+  const automaton = tab === 'minimized' ? min : dfa;
+  if (!automaton) return null;
+  const columns = [...automaton.alphabet].sort();
+  const rows: Row[] = automaton.states.map((s) => ({
+    id: s.id,
+    label: s.id,
+    isStart: s.id === automaton.startState,
+    isAccepting: automaton.acceptStates.has(s.id),
+    cells: columns.map((col) =>
+      automaton.transitions.filter((t) => t.from === s.id && t.symbol === col).map((t) => t.to),
+    ),
+  }));
+  return { columns, rows };
+}
+
+export function TransitionTable({
   activeTab,
   nfa,
   dfa,
   minimizedDfa,
   selectedStateId,
+  activeStateIds,
   onSelectState,
-}) => {
-  const [filterQuery, setFilterQuery] = useState('');
+}: TransitionTableProps) {
+  const [filter, setFilter] = useState('');
+  const data = useMemo(
+    () => buildRows(activeTab, nfa, dfa, minimizedDfa),
+    [activeTab, nfa, dfa, minimizedDfa],
+  );
 
-  // ─── NFA Data Preparation ───
-  const nfaData = useMemo(() => {
-    if (activeTab !== 'nfa' || !nfa) return null;
-
-    const alphabet = [...nfa.alphabet].sort();
-    const columns = [...alphabet, 'ε'];
-
-    // Map: stateId -> symbol -> Set<targetId>
-    const transMap = new Map<number, Map<string, number[]>>();
-    for (const state of nfa.states) {
-      transMap.set(state.id, new Map());
-    }
-
-    for (const t of nfa.transitions) {
-      const sym = t.symbol ?? 'ε';
-      const stateMap = transMap.get(t.from);
-      if (stateMap) {
-        const arr = stateMap.get(sym) ?? [];
-        arr.push(t.to);
-        stateMap.set(sym, arr);
-      }
-    }
-
-    return {
-      states: nfa.states,
-      columns,
-      startState: nfa.startState,
-      acceptStates: nfa.acceptStates,
-      transMap,
-    };
-  }, [activeTab, nfa]);
-
-  // ─── DFA Data Preparation ───
-  const activeDfa = activeTab === 'minimized' ? minimizedDfa : dfa;
-
-  const dfaData = useMemo(() => {
-    if (activeTab === 'nfa' || !activeDfa) return null;
-
-    const alphabet = [...activeDfa.alphabet].sort();
-
-    // Map: stateId -> symbol -> targetId
-    const transMap = new Map<string, Map<string, string>>();
-    for (const state of activeDfa.states) {
-      transMap.set(state.id, new Map());
-    }
-
-    for (const t of activeDfa.transitions) {
-      transMap.get(t.from)?.set(t.symbol, t.to);
-    }
-
-    return {
-      states: activeDfa.states,
-      columns: alphabet,
-      startState: activeDfa.startState,
-      acceptStates: activeDfa.acceptStates,
-      transMap,
-    };
-  }, [activeTab, activeDfa]);
-
-  // ─── Filtered Rows ───
-  const filteredNfaStates = useMemo(() => {
-    if (!nfaData) return [];
-    if (!filterQuery.trim()) return nfaData.states;
-    const q = filterQuery.toLowerCase();
-    return nfaData.states.filter((s) => `q${s.id}`.includes(q) || String(s.id).includes(q));
-  }, [nfaData, filterQuery]);
-
-  const filteredDfaStates = useMemo(() => {
-    if (!dfaData) return [];
-    if (!filterQuery.trim()) return dfaData.states;
-    const q = filterQuery.toLowerCase();
-    return dfaData.states.filter((s) => s.id.toLowerCase().includes(q));
-  }, [dfaData, filterQuery]);
-
-  if (!nfa && !dfa && !minimizedDfa) {
-    return (
-      <div className="p-8 text-center text-slate-400 font-mono text-xs">
-        Compile a regular expression to inspect state transitions.
-      </div>
-    );
+  if (!data) {
+    return <div className="panel__empty">Build an expression to see its transition table.</div>;
   }
 
+  const q = filter.trim().toLowerCase();
+  const rows = q ? data.rows.filter((r) => r.label.toLowerCase().includes(q)) : data.rows;
+  const isNfa = activeTab === 'nfa';
+  const deadCount = isNfa
+    ? 0
+    : data.rows.reduce((n, r) => n + r.cells.filter((c) => c.length === 0).length, 0);
+
   return (
-    <div className="flex flex-col h-full overflow-hidden bg-white">
-      {/* ─── Search & Header Row ─── */}
-      <div className="p-3 border-b border-slate-200 flex items-center justify-between gap-3 bg-slate-50/80 flex-shrink-0">
-        <div className="flex items-center gap-2">
-          <Table2 className="w-4 h-4 text-indigo-600" />
-          <span className="text-xs font-semibold text-slate-800">
-            Transition Matrix <span className="font-mono text-slate-500 text-[11px]">δ(q, σ)</span>
-          </span>
-        </div>
-
-        <div className="relative w-40">
-          <Search className="w-3 h-3 absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            value={filterQuery}
-            onChange={(e) => setFilterQuery(e.target.value)}
-            placeholder="Filter states..."
-            className="w-full h-7 pl-6 pr-2 bg-white border border-slate-200 rounded text-[11px] font-mono text-slate-800 placeholder:text-slate-400 outline-none focus:border-indigo-500"
-          />
-        </div>
+    <div className="panel panel--flush">
+      <div className="table-toolbar">
+        <span className="muted">
+          {data.rows.length} states × {data.columns.length} {isNfa ? 'columns' : 'symbols'}
+          {deadCount > 0 &&
+            `; ${deadCount} missing ${deadCount === 1 ? 'entry rejects' : 'entries reject'}`}
+        </span>
+        <label htmlFor="table-filter" className="visually-hidden">
+          Find a state
+        </label>
+        <input
+          id="table-filter"
+          className="field"
+          type="search"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Find a state"
+        />
       </div>
-
-      {/* ─── Matrix Table Container ─── */}
-      <div className="flex-1 overflow-auto">
-        {activeTab === 'nfa' && nfaData ? (
-          <table className="w-full text-left border-collapse text-xs select-text">
-            <thead className="sticky top-0 bg-slate-100/95 backdrop-blur-md border-b border-slate-200 z-10">
-              <tr>
-                <th className="py-2 px-3 text-center w-12 font-mono text-slate-600 font-medium text-[11px]">
-                  State
+      <div className="table-wrap">
+        <table className="delta">
+          <thead>
+            <tr>
+              <th scope="col">State</th>
+              {data.columns.map((col) => (
+                <th key={col} scope="col" className={col === 'ε' ? 'eps' : undefined}>
+                  {col}
                 </th>
-                {nfaData.columns.map((col) => (
-                  <th key={col} className="py-2 px-3 font-mono font-semibold text-slate-700 text-center">
-                    {col === 'ε' ? <span className="text-amber-600 font-bold">ε</span> : col}
-                  </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr
+                key={row.id}
+                aria-selected={selectedStateId === row.id}
+                data-active={activeStateIds.includes(row.id)}
+                tabIndex={0}
+                onClick={() => onSelectState(row.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onSelectState(row.id);
+                  }
+                }}
+              >
+                <th scope="row">
+                  <span className="state-mark">
+                    <span
+                      className="state-mark__arrow"
+                      aria-label={row.isStart ? 'start' : undefined}
+                    >
+                      {row.isStart ? '→' : ' '}
+                    </span>
+                    <span
+                      className={`state-mark__ring ${row.isAccepting ? 'state-mark__ring--accept' : ''}`}
+                      title={row.isAccepting ? 'accepting state' : undefined}
+                    >
+                      {row.label}
+                    </span>
+                  </span>
+                </th>
+                {row.cells.map((cell, i) => (
+                  <td key={i}>
+                    {cell.length === 0 ? (
+                      <span className="none">{isNfa ? '·' : '∅'}</span>
+                    ) : isNfa ? (
+                      `{${cell.join(', ')}}`
+                    ) : (
+                      cell[0]
+                    )}
+                  </td>
                 ))}
-                <th className="py-2 px-3 text-center font-mono text-slate-600 text-[11px] font-medium w-20">
-                  Status
-                </th>
               </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 font-mono text-xs">
-              {filteredNfaStates.map((state) => {
-                const isStart = state.id === nfaData.startState;
-                const isAccept = nfaData.acceptStates.has(state.id);
-                const isSelected = selectedStateId === `q${state.id}` || selectedStateId === String(state.id);
-                const stateTransitions = nfaData.transMap.get(state.id);
-
-                return (
-                  <tr
-                    key={state.id}
-                    onClick={() => onSelectState?.(`q${state.id}`)}
-                    className={`transition-colors cursor-pointer ${
-                      isSelected
-                        ? 'bg-indigo-50 text-indigo-900 font-semibold'
-                        : 'hover:bg-slate-50 text-slate-700'
-                    }`}
-                  >
-                    <td className="py-2 px-3 font-semibold text-center flex items-center justify-center gap-1">
-                      {isStart && (
-                        <span title="Start state">
-                          <ArrowRight className="w-3 h-3 text-sky-600 stroke-[2.5]" />
-                        </span>
-                      )}
-                      <span>q{state.id}</span>
-                      {isAccept && (
-                        <span title="Accepting state">
-                          <Asterisk className="w-3 h-3 text-emerald-600 stroke-[3]" />
-                        </span>
-                      )}
-                    </td>
-
-                    {nfaData.columns.map((col) => {
-                      const targets = stateTransitions?.get(col);
-                      return (
-                        <td key={col} className="py-2 px-3 text-center">
-                          {targets && targets.length > 0 ? (
-                            <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-800 text-[11px]">
-                              {'{' + targets.map((t) => `q${t}`).join(', ') + '}'}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </td>
-                      );
-                    })}
-
-                    <td className="py-2 px-3 text-center text-[10px]">
-                      {isAccept ? (
-                        <span className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 font-semibold">
-                          Accept
-                        </span>
-                      ) : isStart ? (
-                        <span className="px-1.5 py-0.5 rounded bg-sky-50 border border-sky-200 text-sky-700 font-semibold">
-                          Start
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">Transit</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        ) : dfaData ? (
-          <table className="w-full text-left border-collapse text-xs select-text">
-            <thead className="sticky top-0 bg-slate-100/95 backdrop-blur-md border-b border-slate-200 z-10">
-              <tr>
-                <th className="py-2 px-3 text-center w-14 font-mono text-slate-600 font-medium text-[11px]">
-                  State
-                </th>
-                {dfaData.columns.map((col) => (
-                  <th key={col} className="py-2 px-3 font-mono font-semibold text-slate-700 text-center">
-                    {col}
-                  </th>
-                ))}
-                <th className="py-2 px-3 text-center font-mono text-slate-600 text-[11px] font-medium w-20">
-                  Status
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 font-mono text-xs">
-              {filteredDfaStates.map((state) => {
-                const isStart = state.id === dfaData.startState;
-                const isAccept = dfaData.acceptStates.has(state.id);
-                const isSelected = selectedStateId === state.id;
-                const stateTransitions = dfaData.transMap.get(state.id);
-
-                return (
-                  <tr
-                    key={state.id}
-                    onClick={() => onSelectState?.(state.id)}
-                    className={`transition-colors cursor-pointer ${
-                      isSelected
-                        ? 'bg-indigo-50 text-indigo-900 font-semibold'
-                        : 'hover:bg-slate-50 text-slate-700'
-                    }`}
-                  >
-                    <td className="py-2 px-3 font-semibold text-center flex items-center justify-center gap-1">
-                      {isStart && (
-                        <span title="Start state">
-                          <ArrowRight className="w-3 h-3 text-sky-600 stroke-[2.5]" />
-                        </span>
-                      )}
-                      <span className="text-indigo-700 font-bold">{state.id}</span>
-                      {isAccept && (
-                        <span title="Accepting state">
-                          <Asterisk className="w-3 h-3 text-emerald-600 stroke-[3]" />
-                        </span>
-                      )}
-                    </td>
-
-                    {dfaData.columns.map((col) => {
-                      const target = stateTransitions?.get(col);
-                      return (
-                        <td key={col} className="py-2 px-3 text-center">
-                          {target ? (
-                            <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-800 text-[11px]">
-                              {target}
-                            </span>
-                          ) : (
-                            <span className="text-slate-400">—</span>
-                          )}
-                        </td>
-                      );
-                    })}
-
-                    <td className="py-2 px-3 text-center text-[10px]">
-                      {isAccept ? (
-                        <span className="px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-700 font-semibold">
-                          Accept
-                        </span>
-                      ) : isStart ? (
-                        <span className="px-1.5 py-0.5 rounded bg-sky-50 border border-sky-200 text-sky-700 font-semibold">
-                          Start
-                        </span>
-                      ) : (
-                        <span className="text-slate-400">Transit</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        ) : null}
+            ))}
+          </tbody>
+        </table>
+        {rows.length === 0 && <div className="panel__empty">No state matches “{filter}”.</div>}
       </div>
     </div>
   );
-};
+}

@@ -1,210 +1,223 @@
 /**
- * Automata Studio — Production TOC Workbench (Light Theme)
- * Full-viewport dashboard layout with zero outer scroll, dual-split interactive visualization and algorithmic inspection.
+ * Automata Studio — app shell.
+ * Composer on top, pipeline rail, graph canvas on the left and an inspector on the right.
  */
 
-import { useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import type cytoscape from 'cytoscape';
-import { Table2, Play, Cpu, AlertTriangle } from 'lucide-react';
 import { useAutomata } from './hooks/useAutomata';
+import { cssVar, useTheme } from './hooks/useTheme';
 import { Header } from './components/Header/Header';
+import { Composer } from './components/Composer/Composer';
+import { PipelineRail } from './components/PipelineRail/PipelineRail';
 import { CanvasWorkspace } from './components/CanvasWorkspace/CanvasWorkspace';
 import { TransitionTable } from './components/TransitionTable/TransitionTable';
 import { StringSimulator } from './components/Simulator/StringSimulator';
 import { StepBreakdown } from './components/StepBreakdown/StepBreakdown';
+import { IconRun, IconSteps, IconTable } from './components/Icons';
 import {
   dfaToCytoscapeElements,
+  isEdge,
   nfaToCytoscapeElements,
   type CytoscapeElement,
 } from './adapters/cytoscapeAdapter';
-import type { StateInfo, RightPanelView } from './types';
+import { downloadFile, exportDFAtoJSON, exportGraphAsPNG, exportNFAtoJSON } from './utils/export';
+import { sanitizeFilename } from './utils/helpers';
+import type { ActiveTab, RightPanelView, StateInfo } from './types';
+
+const PANELS: Array<{ id: RightPanelView; label: string; Icon: typeof IconRun }> = [
+  { id: 'simulator', label: 'Run a string', Icon: IconRun },
+  { id: 'table', label: 'Transitions', Icon: IconTable },
+  { id: 'steps', label: 'How it’s built', Icon: IconSteps },
+];
+
+const FILE_PREFIX: Record<ActiveTab, string> = { nfa: 'NFA', dfa: 'DFA', minimized: 'MinDFA' };
 
 export function App() {
   const [state, actions] = useAutomata();
-  const [selectedState, setSelectedState] = useState<StateInfo | null>(null);
-  const [activeRightPanel, setActiveRightPanel] = useState<RightPanelView>('simulator');
-  const [activeSimState, setActiveSimState] = useState<string | null>(null);
+  const [theme, toggleTheme] = useTheme();
+  const [panel, setPanel] = useState<RightPanelView>('simulator');
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [activeIds, setActiveIds] = useState<string[]>([]);
   const cyRef = useRef<cytoscape.Core | null>(null);
 
-  // Auto-compile default regex on first load if not yet compiled
-  useEffect(() => {
-    if (!state.result && state.regex) {
-      actions.convert();
-    }
-  }, [state.result, state.regex, actions]);
+  const result = state.result?.success ? state.result : null;
+  const error = state.result && !state.result.success ? state.result.errors[0] : null;
+  const tab = state.activeTab;
 
-  // Build Cytoscape graph elements based on the active tab
   const elements: CytoscapeElement[] = useMemo(() => {
-    if (!state.result?.success) return [];
-    const res = state.result;
-    switch (state.activeTab) {
-      case 'nfa':
-        return nfaToCytoscapeElements(res.nfa);
-      case 'dfa':
-        return dfaToCytoscapeElements(res.dfa);
-      case 'minimized':
-        return dfaToCytoscapeElements(res.minimizedDfa);
-    }
-  }, [state.result, state.activeTab]);
+    if (!result) return [];
+    if (tab === 'nfa') return nfaToCytoscapeElements(result.nfa);
+    return dfaToCytoscapeElements(tab === 'dfa' ? result.dfa : result.minimizedDfa);
+  }, [result, tab]);
 
-  const handleStateSelect = useCallback((info: StateInfo | null) => {
-    setSelectedState(info);
-  }, []);
+  // Unique per automaton on screen, so the canvas re-lays out only when it really changes.
+  const graphKey = `${result?.regex ?? ''}|${tab}|${state.result ? 'r' : '-'}`;
 
-  const handleCyReady = useCallback((cy: cytoscape.Core) => {
+  // Selection belongs to one graph; drop it when the graph changes.
+  const [selectionKey, setSelectionKey] = useState(graphKey);
+  if (selectionKey !== graphKey) {
+    setSelectionKey(graphKey);
+    setSelectedId(null);
+  }
+
+  const selectedState: StateInfo | null = useMemo(() => {
+    if (!selectedId) return null;
+    const node = elements.find((el) => !isEdge(el) && el.data.id === selectedId);
+    if (!node || isEdge(node)) return null;
+    const labelOf = new Map(
+      elements.filter((el) => !isEdge(el)).map((el) => [el.data.id, el.data.label]),
+    );
+    return {
+      id: node.data.id,
+      label: node.data.label,
+      isStart: node.data.isStart,
+      isAccepting: node.data.isAccepting,
+      nfaStates: node.data.nfaStates ?? '',
+      transitions: elements
+        .filter(isEdge)
+        .filter((e) => e.data.source === selectedId)
+        .map((e) => ({
+          symbol: e.data.label,
+          target: labelOf.get(e.data.target) ?? e.data.target,
+        })),
+    };
+  }, [elements, selectedId]);
+
+  const handleCyReady = useCallback((cy: cytoscape.Core | null) => {
     cyRef.current = cy;
   }, []);
 
-  const getCy = useCallback(() => cyRef.current, []);
+  const handleActiveStates = useCallback((ids: string[]) => {
+    setActiveIds((prev) =>
+      prev.length === ids.length && prev.every((v, i) => v === ids[i]) ? prev : ids,
+    );
+  }, []);
 
-  const result = state.result;
+  const toggleSelect = useCallback((id: string | null) => {
+    setSelectedId((prev) => (id !== null && prev === id ? null : id));
+  }, []);
 
-  // Active DFA used for simulation (DFA or Minimized DFA)
-  const simulationDfa = useMemo(() => {
-    if (!result?.success) return null;
-    return state.activeTab === 'minimized' ? result.minimizedDfa : result.dfa;
-  }, [result, state.activeTab]);
+  const baseName = `${FILE_PREFIX[tab]}_${sanitizeFilename(result?.regex || 'automaton', 24)}`;
+
+  const exportPNG = () => exportGraphAsPNG(cyRef.current, `${baseName}.png`, cssVar('--paper'));
+
+  const exportJSON = () => {
+    if (!result) return;
+    const json =
+      tab === 'nfa'
+        ? exportNFAtoJSON(result.nfa)
+        : exportDFAtoJSON(
+            tab === 'dfa' ? result.dfa : result.minimizedDfa,
+            tab === 'dfa' ? 'DFA' : 'MinimizedDFA',
+          );
+    downloadFile(json, `${baseName}.json`, 'application/json');
+  };
+
+  const counts = result
+    ? {
+        nfa: result.nfa.states.length,
+        dfa: result.dfa.states.length,
+        minimized: result.minimizedDfa.states.length,
+      }
+    : null;
+
+  const simDfa = result ? (tab === 'minimized' ? result.minimizedDfa : result.dfa) : null;
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex flex-col bg-slate-50 text-slate-900 font-sans select-none">
-      {/* ═══════════════ TOP HEADER / CONTROL BAR ═══════════════ */}
+    <div className="app">
       <Header
-        regex={state.regex}
-        onRegexChange={actions.setRegex}
-        onCompile={actions.convert}
-        onReset={() => {
-          actions.reset();
-          setSelectedState(null);
-          setActiveSimState(null);
-        }}
-        validationMessage={state.validationMessage}
-        validationIsError={state.validationIsError}
-        isLoading={state.isLoading}
-        activeTab={state.activeTab}
-        nfa={result?.success ? result.nfa : null}
-        dfa={result?.success ? result.dfa : null}
-        minimizedDfa={result?.success ? result.minimizedDfa : null}
-        getCy={getCy}
+        theme={theme}
+        onToggleTheme={toggleTheme}
+        canExport={Boolean(result)}
+        onExportPNG={exportPNG}
+        onExportJSON={exportJSON}
       />
 
-      {/* ═══════════════ MAIN WORKSPACE (SPLIT VIEW) ═══════════════ */}
-      <div className="flex-1 flex overflow-hidden min-h-0 w-full relative">
-        {/* Error Notification Bar (if conversion fails) */}
-        {result && !result.success && (
-          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-50 max-w-lg w-full px-4">
-            <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 shadow-xl flex items-start gap-2.5 backdrop-blur-md">
-              <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
-              <div className="text-xs">
-                <span className="font-semibold text-rose-900">Compilation Error:</span>
-                <p className="text-rose-700 font-mono text-[11px] mt-0.5">{result.errors[0]}</p>
-              </div>
-            </div>
-          </div>
-        )}
+      <Composer
+        regex={state.regex}
+        onRegexChange={actions.setRegex}
+        onBuild={actions.convert}
+        onClear={actions.reset}
+        validationMessage={state.validationMessage}
+        validationIsError={state.validationIsError}
+        errorPosition={state.errorPosition}
+        isLoading={state.isLoading}
+        isStale={state.isStale || !state.result}
+        hasResult={Boolean(result)}
+      />
 
-        {/* ─── LEFT PANEL: Graph Visualizer Canvas ─── */}
-        <section
-          aria-label="Automata Graph Canvas"
-          className="flex-1 h-full min-w-0 relative flex flex-col border-r border-slate-200 overflow-hidden"
-        >
+      <main className="workspace">
+        <section className="canvas-pane" aria-label="Automaton">
+          <PipelineRail
+            builtRegex={result?.regex ?? null}
+            activeTab={tab}
+            onTabChange={actions.setActiveTab}
+            counts={counts}
+          />
           <CanvasWorkspace
             elements={elements}
-            activeTab={state.activeTab}
-            onTabChange={actions.setActiveTab}
-            nfaStateCount={result?.success ? result.nfa.states.length : undefined}
-            dfaStateCount={result?.success ? result.dfa.states.length : undefined}
-            minDfaStateCount={result?.success ? result.minimizedDfa.states.length : undefined}
+            graphKey={graphKey}
+            theme={theme}
             selectedState={selectedState}
-            onStateSelect={handleStateSelect}
-            activeSimulationState={activeSimState}
+            onStateSelect={toggleSelect}
+            activeStateIds={panel === 'simulator' ? activeIds : []}
             onCyReady={handleCyReady}
             isLoading={state.isLoading}
+            error={error}
+            isNfa={tab === 'nfa'}
           />
         </section>
 
-        {/* ─── RIGHT PANEL: Inspection & Simulation Drawer ─── */}
-        <aside
-          aria-label="Automata Inspector and Simulation Drawer"
-          className="w-[410px] xl:w-[460px] 2xl:w-[500px] h-full flex flex-col bg-white flex-shrink-0 border-l border-slate-200 shadow-xs overflow-hidden z-20"
-        >
-          {/* Drawer Top Navigation Tabs */}
-          <div className="h-11 border-b border-slate-200 bg-slate-50/70 px-3 flex items-center justify-between flex-shrink-0">
-            <div className="flex items-center gap-1 p-1 bg-slate-200/60 rounded-lg border border-slate-200">
-              {[
-                { id: 'simulator' as const, label: 'String Simulator', icon: Play },
-                { id: 'table' as const, label: 'Transition Table', icon: Table2 },
-                { id: 'steps' as const, label: 'Step Breakdown', icon: Cpu },
-              ].map(({ id, label, icon: Icon }) => {
-                const isActive = activeRightPanel === id;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setActiveRightPanel(id)}
-                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                      isActive
-                        ? 'bg-white text-indigo-600 border border-slate-200/80 shadow-xs font-semibold'
-                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/50'
-                    }`}
-                  >
-                    <Icon className="w-3.5 h-3.5" />
-                    <span>{label}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Quick State Count Pill */}
-            {result?.success && (
-              <span className="text-[10px] font-mono font-semibold text-slate-500 uppercase tracking-wider hidden sm:inline">
-                {state.activeTab.toUpperCase()}
-              </span>
-            )}
+        <aside className="inspector" aria-label="Inspector">
+          <div className="tabs" role="tablist" aria-label="Inspector views">
+            {PANELS.map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                id={`panel-tab-${id}`}
+                type="button"
+                role="tab"
+                className="tabs__tab"
+                aria-selected={panel === id}
+                aria-controls="inspector-panel"
+                onClick={() => setPanel(id)}
+              >
+                <Icon />
+                {label}
+              </button>
+            ))}
           </div>
 
-          {/* Drawer Views */}
-          <div className="flex-1 overflow-hidden relative">
-            {activeRightPanel === 'simulator' && (
+          <div
+            id="inspector-panel"
+            role="tabpanel"
+            aria-labelledby={`panel-tab-${panel}`}
+            style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}
+          >
+            {panel === 'simulator' && (
               <StringSimulator
-                dfa={simulationDfa}
-                onActiveStateChange={setActiveSimState}
+                key={graphKey}
+                mode={tab === 'nfa' ? 'nfa' : 'dfa'}
+                nfa={result?.nfa ?? null}
+                dfa={simDfa}
+                onActiveStatesChange={handleActiveStates}
               />
             )}
-
-            {activeRightPanel === 'table' && (
+            {panel === 'table' && (
               <TransitionTable
-                activeTab={state.activeTab}
-                nfa={result?.success ? result.nfa : null}
-                dfa={result?.success ? result.dfa : null}
-                minimizedDfa={result?.success ? result.minimizedDfa : null}
-                selectedStateId={selectedState?.id}
-                onSelectState={(stateId) => {
-                  const cy = cyRef.current;
-                  if (!cy) return;
-                  const node = cy.getElementById(stateId);
-                  if (node && node.length > 0) {
-                    cy.elements().removeClass('highlighted');
-                    node.addClass('highlighted');
-                    node.connectedEdges('[source = "' + stateId + '"]').addClass('highlighted');
-                    setSelectedState({
-                      id: stateId,
-                      label: node.data('label') || stateId,
-                      isStart: Boolean(node.data('isStart')),
-                      isAccepting: Boolean(node.data('isAccepting')),
-                      nfaStates: node.data('nfaStates') || '',
-                      transitions: [],
-                    });
-                  }
-                }}
+                activeTab={tab}
+                nfa={result?.nfa ?? null}
+                dfa={result?.dfa ?? null}
+                minimizedDfa={result?.minimizedDfa ?? null}
+                selectedStateId={selectedId}
+                activeStateIds={activeIds}
+                onSelectState={toggleSelect}
               />
             )}
-
-            {activeRightPanel === 'steps' && (
-              <StepBreakdown result={result} />
-            )}
+            {panel === 'steps' && <StepBreakdown result={state.result} />}
           </div>
         </aside>
-      </div>
+      </main>
     </div>
   );
 }

@@ -6,10 +6,19 @@
 import type { RegexNode } from '../engine/parser/ast';
 import type { NFA, NFAState, NFATransition } from '../engine/nfa/types';
 import type { DFA, DFAState, DFATransition } from '../engine/dfa/types';
-import type { ConversionResult, ConversionSuccess, ConversionFailure, ConversionStep } from '../engine/pipeline';
+import type {
+  ConversionResult,
+  ConversionSuccess,
+  ConversionFailure,
+  ConversionStep,
+} from '../engine/pipeline';
 import type { ValidationResult } from '../engine/validation/validateRegex';
 import type { CytoscapeElement, CytoscapeNode, CytoscapeEdge } from '../adapters/cytoscapeAdapter';
-import type { ActiveTab, AutomataState as HookAutomataState, AutomataActions } from '../hooks/useAutomata';
+import type {
+  ActiveTab,
+  AutomataState as HookAutomataState,
+  AutomataActions,
+} from '../hooks/useAutomata';
 import type { DFASimulationTrace } from '../engine/dfa/dfaUtils';
 
 // Re-export core engine representations
@@ -56,6 +65,7 @@ export interface StateInfo {
   isStart: boolean;
   isAccepting: boolean;
   nfaStates: string;
+  /** Outgoing transitions; `target` is the target state's display label. */
   transitions: Array<{ symbol: string; target: string }>;
 }
 

@@ -8,6 +8,8 @@ import { validateRegex } from '../engine/validation/validateRegex';
 
 export type ActiveTab = 'nfa' | 'dfa' | 'minimized';
 
+export const DEFAULT_REGEX = '(a|b)*abb';
+
 export interface AutomataState {
   regex: string;
   result: ConversionResult | null;
@@ -15,63 +17,72 @@ export interface AutomataState {
   isLoading: boolean;
   validationMessage: string | null;
   validationIsError: boolean;
+  /** Character position (0-based) of the first validation error, when known. */
+  errorPosition: number | null;
+  /** True when the input differs from the expression that was last built. */
+  isStale: boolean;
 }
 
 export interface AutomataActions {
   setRegex: (regex: string) => void;
-  convert: () => void;
+  /** Builds the automata. Pass `regexOverride` to build a value that was just set (e.g. a preset). */
+  convert: (regexOverride?: string) => void;
   reset: () => void;
   setActiveTab: (tab: ActiveTab) => void;
 }
 
 export function useAutomata(): [AutomataState, AutomataActions] {
-  const [regex, setRegexState] = useState<string>('(a|b)*abb');
-  const [result, setResult] = useState<ConversionResult | null>(null);
+  const [regex, setRegex] = useState<string>(DEFAULT_REGEX);
+  // Build the default expression synchronously so the first paint already has a graph.
+  const [result, setResult] = useState<ConversionResult | null>(() =>
+    convertRegexToAutomata(DEFAULT_REGEX),
+  );
   const [activeTab, setActiveTab] = useState<ActiveTab>('nfa');
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
-  // Real-time validation as user types
-  const { validationMessage, validationIsError } = useMemo(() => {
-    if (regex.trim().length === 0) {
-      return { validationMessage: null, validationIsError: false };
+  // Real-time validation as the user types
+  const { validationMessage, validationIsError, errorPosition } = useMemo(() => {
+    const trimmed = regex.trim();
+    if (trimmed.length === 0) {
+      return { validationMessage: null, validationIsError: false, errorPosition: null };
     }
-    const validation = validateRegex(regex.trim());
+    const validation = validateRegex(trimmed);
     if (!validation.valid) {
+      const first = validation.errors[0];
       return {
-        validationMessage: validation.errors[0]?.message ?? 'Invalid regex',
+        validationMessage: first?.message ?? 'This expression is not valid.',
         validationIsError: true,
+        errorPosition: first?.position ?? null,
       };
     }
-    return { validationMessage: 'Valid regular expression', validationIsError: false };
+    return { validationMessage: null, validationIsError: false, errorPosition: null };
   }, [regex]);
 
-  const setRegex = useCallback((newRegex: string) => {
-    setRegexState(newRegex);
-  }, []);
+  const convert = useCallback(
+    (regexOverride?: string) => {
+      const source = (regexOverride ?? regex).trim();
+      if (!source) return;
+      setIsLoading(true);
 
-  const convert = useCallback(() => {
-    if (!regex.trim()) return;
-    setIsLoading(true);
-
-    // Use requestAnimationFrame to allow UI to update before computation
-    requestAnimationFrame(() => {
-      try {
-        const conversionResult = convertRegexToAutomata(regex.trim());
-        setResult(conversionResult);
-        if (conversionResult.success) {
-          setActiveTab('nfa');
+      // Let the UI paint the loading state before the (synchronous) computation.
+      requestAnimationFrame(() => {
+        try {
+          setResult(convertRegexToAutomata(source));
+        } finally {
+          setIsLoading(false);
         }
-      } finally {
-        setIsLoading(false);
-      }
-    });
-  }, [regex]);
+      });
+    },
+    [regex],
+  );
 
   const reset = useCallback(() => {
-    setRegexState('');
+    setRegex('');
     setResult(null);
     setActiveTab('nfa');
   }, []);
+
+  const isStale = Boolean(result && result.regex !== regex.trim());
 
   const state: AutomataState = {
     regex,
@@ -80,14 +91,14 @@ export function useAutomata(): [AutomataState, AutomataActions] {
     isLoading,
     validationMessage,
     validationIsError,
+    errorPosition,
+    isStale,
   };
 
-  const actions: AutomataActions = {
-    setRegex,
-    convert,
-    reset,
-    setActiveTab,
-  };
+  const actions = useMemo<AutomataActions>(
+    () => ({ setRegex, convert, reset, setActiveTab }),
+    [convert, reset],
+  );
 
   return [state, actions];
 }

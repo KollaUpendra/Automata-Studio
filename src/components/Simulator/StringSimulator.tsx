@@ -1,381 +1,321 @@
 /**
- * Automata Studio — Production String Simulator Component (Light Theme)
- * Step-by-step execution engine with tape visualizer, playback controls, and graph node synchronization.
+ * StringSimulator (remount with a new `key` when the automaton changes to reset the run) — runs an input string through the automaton on screen,
+ * one symbol at a time, highlighting the current state(s) on the graph.
+ *
+ * On the NFA tab it tracks the full set of active states (after ε-closure);
+ * on the DFA tabs it follows the single deterministic path.
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import {
-  Play,
-  Pause,
-  StepForward,
-  RotateCcw,
-  CheckCircle2,
-  XCircle,
-  Clock,
-} from 'lucide-react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { DFA } from '../../engine/dfa/types';
-import { traceDFA, type DFASimulationTrace } from '../../engine/dfa/dfaUtils';
+import type { NFA } from '../../engine/nfa/types';
+import { traceDFA } from '../../engine/dfa/dfaUtils';
+import { traceNFA } from '../../engine/nfa/nfaSimulation';
+import {
+  IconCheck,
+  IconPause,
+  IconPending,
+  IconPlay,
+  IconReject,
+  IconRewind,
+  IconStep,
+} from '../Icons';
 
 interface StringSimulatorProps {
+  mode: 'nfa' | 'dfa';
+  nfa: NFA | null;
   dfa: DFA | null;
-  onActiveStateChange?: (stateId: string | null) => void;
+  onActiveStatesChange: (stateIds: string[]) => void;
 }
 
-export const StringSimulator: React.FC<StringSimulatorProps> = ({
-  dfa,
-  onActiveStateChange,
-}) => {
-  const [inputString, setInputString] = useState<string>('abb');
-  const [currentStepIndex, setCurrentStepIndex] = useState<number>(0);
-  const [isPlaying, setIsPlaying] = useState<boolean>(false);
-  const [playbackSpeedMs, setPlaybackSpeedMs] = useState<number>(800);
-  const timerRef = useRef<number | null>(null);
+interface UnifiedTrace {
+  accepted: boolean;
+  /** Active node ids after reading 0..n symbols (graph ids). */
+  ids: string[][];
+  /** Display labels for the same. */
+  labels: string[];
+  /** Index of the symbol that could not be read, if the run got stuck. */
+  stuckAt: number | null;
+}
 
-  // Compute full trace using the deterministic transition function
-  const trace: DFASimulationTrace | null = React.useMemo(() => {
-    if (!dfa) return null;
-    return traceDFA(dfa, inputString);
-  }, [dfa, inputString]);
+const SPEEDS = [
+  { label: '½×', ms: 1200 },
+  { label: '1×', ms: 700 },
+  { label: '2×', ms: 350 },
+];
 
-  // Current active state ID based on current step index
-  const activeStateId = React.useMemo(() => {
-    if (!trace || !dfa) return null;
-    return trace.statesVisited[currentStepIndex] ?? null;
-  }, [trace, dfa, currentStepIndex]);
-
-  // Sync active state back to parent (which informs Cytoscape canvas)
-  useEffect(() => {
-    onActiveStateChange?.(activeStateId);
-  }, [activeStateId, onActiveStateChange]);
-
-  // Clean up timer on unmount
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+function unify(
+  mode: 'nfa' | 'dfa',
+  nfa: NFA | null,
+  dfa: DFA | null,
+  input: string,
+): UnifiedTrace | null {
+  if (mode === 'nfa' && nfa) {
+    const t = traceNFA(nfa, input);
+    return {
+      accepted: t.accepted,
+      ids: t.statesVisited.map((set) => set.map(String)),
+      labels: t.statesVisited.map((set) => `{${set.map((s) => `s${s}`).join(', ')}}`),
+      stuckAt: t.stuckAt ?? null,
     };
-  }, []);
-
-  // Step Forward action
-  const handleStepForward = useCallback(() => {
-    if (!trace) return;
-    setCurrentStepIndex((prev) => {
-      const maxSteps = trace.statesVisited.length - 1;
-      if (prev >= maxSteps) {
-        setIsPlaying(false);
-        return prev;
-      }
-      return prev + 1;
-    });
-  }, [trace]);
-
-  // Reset to initial state
-  const handleReset = useCallback(() => {
-    setIsPlaying(false);
-    if (timerRef.current) clearInterval(timerRef.current);
-    setCurrentStepIndex(0);
-  }, []);
-
-  // Play / Pause toggle
-  const togglePlay = () => {
-    if (!trace) return;
-
-    if (isPlaying) {
-      setIsPlaying(false);
-      if (timerRef.current) clearInterval(timerRef.current);
-    } else {
-      // If already at the end, restart from beginning
-      if (currentStepIndex >= trace.statesVisited.length - 1) {
-        setCurrentStepIndex(0);
-      }
-      setIsPlaying(true);
-    }
-  };
-
-  // Play loop effect
-  useEffect(() => {
-    if (!isPlaying) {
-      if (timerRef.current) clearInterval(timerRef.current);
-      return;
-    }
-
-    timerRef.current = window.setInterval(() => {
-      if (!trace) return;
-      setCurrentStepIndex((prev) => {
-        const maxSteps = trace.statesVisited.length - 1;
-        if (prev >= maxSteps) {
-          setIsPlaying(false);
-          return prev;
-        }
-        return prev + 1;
-      });
-    }, playbackSpeedMs);
-
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
+  }
+  if (mode === 'dfa' && dfa) {
+    const t = traceDFA(dfa, input);
+    const stuck = t.statesVisited.length - 1 < input.length;
+    return {
+      accepted: t.accepted,
+      ids: t.statesVisited.map((s) => [s]),
+      labels: t.statesVisited,
+      stuckAt: stuck ? t.statesVisited.length - 1 : null,
     };
-  }, [isPlaying, trace, playbackSpeedMs]);
+  }
+  return null;
+}
 
-  if (!dfa) {
-    return (
-      <div className="p-8 text-center text-slate-400 font-mono text-xs">
-        Compile a regular expression to test strings against the generated automaton.
-      </div>
-    );
+export function StringSimulator({ mode, nfa, dfa, onActiveStatesChange }: StringSimulatorProps) {
+  const [input, setInput] = useState('abb');
+  const [step, setStep] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState(700);
+
+  const automaton = mode === 'nfa' ? nfa : dfa;
+  const alphabet = useMemo(() => (automaton ? [...automaton.alphabet].sort() : []), [automaton]);
+  const trace = useMemo(() => unify(mode, nfa, dfa, input), [mode, nfa, dfa, input]);
+
+  const lastStep = trace ? trace.ids.length - 1 : 0;
+  const finished = step >= lastStep;
+  const running = playing && !finished;
+
+  // Publish the highlighted state(s) to the graph.
+  const activeIds = trace?.ids[Math.min(step, lastStep)];
+  useEffect(() => {
+    onActiveStatesChange(activeIds ?? []);
+  }, [activeIds, onActiveStatesChange]);
+
+  // Clear highlight when the simulator unmounts (another panel opened).
+  useEffect(() => () => onActiveStatesChange([]), [onActiveStatesChange]);
+
+  // Playback loop: advance one symbol per tick until the run finishes.
+  useEffect(() => {
+    if (!running) return;
+    const id = window.setTimeout(() => setStep((s) => s + 1), speed);
+    return () => window.clearTimeout(id);
+  }, [running, step, speed]);
+
+  if (!automaton || !trace) {
+    return <div className="panel__empty">Build an expression to try strings against it.</div>;
   }
 
-  const alphabetList = Array.from(dfa.alphabet).sort().join(', ');
-  const maxSteps = trace ? trace.statesVisited.length - 1 : 0;
-  const isFinished = currentStepIndex >= maxSteps;
-  const isAcceptedAtEnd = trace?.accepted && isFinished;
-  const isRejectedAtEnd = !trace?.accepted && isFinished;
+  const unknown = [...new Set([...input].filter((ch) => !automaton.alphabet.has(ch)))];
+  const current = Math.min(step, lastStep);
+  const stuckHere = trace.stuckAt !== null && finished;
+
+  const play = () => {
+    if (finished) setStep(0);
+    setPlaying(true);
+  };
+
+  let verdict: { cls: string; icon: ReactNode; title: string; body: ReactNode };
+  if (!finished) {
+    verdict = {
+      cls: '',
+      icon: <IconPending />,
+      title: `Read ${current} of ${input.length} symbol${input.length === 1 ? '' : 's'}`,
+      body: (
+        <>
+          Now in <span className="hl">{trace.labels[current]}</span>. Step or play to continue.
+        </>
+      ),
+    };
+  } else if (trace.accepted) {
+    verdict = {
+      cls: 'verdict--accept',
+      icon: <IconCheck />,
+      title: input.length ? `Accepted “${input}”` : 'Accepts the empty string ε',
+      body: (
+        <>
+          Finished in <span className="hl">{trace.labels[current]}</span>
+          {mode === 'nfa' ? ', which contains an accepting state.' : ', an accepting state.'}
+        </>
+      ),
+    };
+  } else if (stuckHere) {
+    const sym = input[trace.stuckAt!];
+    verdict = {
+      cls: 'verdict--reject',
+      icon: <IconReject />,
+      title: `Rejected “${input}”`,
+      body: (
+        <>
+          No transition on <strong className="code">{sym}</strong> from{' '}
+          <span className="hl">{trace.labels[current]}</span> (symbol {trace.stuckAt! + 1}), so the
+          machine stops.
+        </>
+      ),
+    };
+  } else {
+    verdict = {
+      cls: 'verdict--reject',
+      icon: <IconReject />,
+      title: input.length ? `Rejected “${input}”` : 'Rejects the empty string ε',
+      body: (
+        <>
+          Finished in <span className="hl">{trace.labels[current]}</span>
+          {mode === 'nfa' ? ', which has no accepting state.' : ', which is not accepting.'}
+        </>
+      ),
+    };
+  }
 
   return (
-    <div className="flex flex-col h-full overflow-y-auto p-4 space-y-4 bg-white">
-      {/* ─── Header Info ─── */}
-      <div className="space-y-1">
-        <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold text-slate-800 uppercase tracking-wider">
-            Deterministic String Simulator
-          </span>
-          <span className="text-[10px] font-mono text-slate-500 font-semibold">
-            Σ = {'{'}{alphabetList || '∅'}{'}'}
-          </span>
-        </div>
-        <p className="text-[11px] text-slate-500 leading-relaxed">
-          Step through evaluation character-by-character to witness state transitions along the input tape.
-        </p>
+    <div className="panel">
+      <p className="panel__intro">
+        {mode === 'nfa'
+          ? 'The NFA can be in several states at once. After each symbol it moves every active state, then follows ε-moves.'
+          : 'The DFA follows exactly one transition per symbol. Watch the highlighted state on the graph.'}
+      </p>
+
+      <label htmlFor="sim-input" className="h3" style={{ display: 'block' }}>
+        Input string
+      </label>
+      <div className="sim-input">
+        <input
+          id="sim-input"
+          className="field"
+          type="text"
+          value={input}
+          onChange={(e) => {
+            setInput(e.target.value.replace(/\s/g, ''));
+            setStep(0);
+            setPlaying(false);
+          }}
+          placeholder="leave empty to test ε"
+          spellCheck={false}
+          autoComplete="off"
+          autoCapitalize="off"
+        />
+      </div>
+      <p className={`sim-note ${unknown.length ? 'sim-note--warn' : ''}`}>
+        {unknown.length
+          ? `${unknown.map((c) => `“${c}”`).join(', ')} ${unknown.length === 1 ? 'is' : 'are'} not in the alphabet {${alphabet.join(', ')}}.`
+          : `Alphabet Σ = {${alphabet.join(', ')}}`}
+      </p>
+
+      <div className="tape" aria-label="Input tape">
+        {input.length === 0 ? (
+          <div className="tape__empty">Empty string ε</div>
+        ) : (
+          [...input].map((ch, i) => {
+            const isStuck = stuckHere && i === trace.stuckAt;
+            const cls = isStuck
+              ? 'tape__cell--stuck'
+              : i === current && !finished
+                ? 'tape__cell--head'
+                : i < current
+                  ? 'tape__cell--read'
+                  : '';
+            return (
+              <div
+                key={i}
+                className={`tape__cell ${cls}`}
+                aria-current={i === current && !finished ? 'step' : undefined}
+              >
+                {ch}
+                <span className="tape__index">{i + 1}</span>
+              </div>
+            );
+          })
+        )}
       </div>
 
-      {/* ─── Input Row ─── */}
-      <div className="flex items-center gap-2">
-        <div className="relative flex-1">
-          <input
-            type="text"
-            value={inputString}
-            onChange={(e) => {
-              setInputString(e.target.value);
-              setCurrentStepIndex(0);
-              setIsPlaying(false);
-            }}
-            placeholder="Enter input string (e.g. abb)..."
-            spellCheck={false}
-            className="w-full h-9 bg-slate-50 border border-slate-200 rounded-md pl-3 pr-16 font-mono text-xs text-slate-900 placeholder:text-slate-400 outline-none focus:bg-white focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/20"
-          />
+      <div className="transport">
+        {running ? (
           <button
             type="button"
-            onClick={() => {
-              setInputString('');
-              setCurrentStepIndex(0);
-              setIsPlaying(false);
-            }}
-            className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-200/70 hover:bg-slate-300 text-slate-700 transition-colors"
-            title="Test empty string ε"
+            className="btn btn--primary btn--sm"
+            onClick={() => setPlaying(false)}
           >
-            ε (empty)
+            <IconPause /> Pause
           </button>
-        </div>
-
-        {/* Speed Selector */}
-        <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-md p-1 h-9 flex-shrink-0">
-          <Clock className="w-3 h-3 text-slate-400 ml-1" />
-          {[
-            { label: '1x', ms: 800 },
-            { label: '2x', ms: 400 },
-          ].map((sp) => (
+        ) : (
+          <button type="button" className="btn btn--primary btn--sm" onClick={play}>
+            <IconPlay /> {finished && current > 0 ? 'Replay' : 'Play'}
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={() => setStep((s) => Math.min(s + 1, lastStep))}
+          disabled={finished || running}
+        >
+          <IconStep /> Step
+        </button>
+        <button
+          type="button"
+          className="btn btn--sm"
+          onClick={() => setStep(lastStep)}
+          disabled={finished || running}
+          title="Jump to the result"
+        >
+          Run to end
+        </button>
+        <button
+          type="button"
+          className="btn btn--quiet btn--sm btn--icon"
+          onClick={() => {
+            setPlaying(false);
+            setStep(0);
+          }}
+          disabled={step === 0}
+          title="Back to the start"
+          aria-label="Back to the start"
+        >
+          <IconRewind />
+        </button>
+        <div className="speed" role="group" aria-label="Playback speed">
+          {SPEEDS.map((s) => (
             <button
-              key={sp.label}
+              key={s.ms}
               type="button"
-              onClick={() => setPlaybackSpeedMs(sp.ms)}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-mono transition-colors ${
-                playbackSpeedMs === sp.ms
-                  ? 'bg-white text-indigo-700 font-bold shadow-xs'
-                  : 'text-slate-500 hover:text-slate-800'
-              }`}
+              aria-pressed={speed === s.ms}
+              onClick={() => setSpeed(s.ms)}
             >
-              {sp.label}
+              {s.label}
             </button>
           ))}
         </div>
       </div>
 
-      {/* ─── Tape Visualization ─── */}
-      <div className="space-y-1.5">
-        <div className="flex items-center justify-between text-[11px] font-mono text-slate-600">
-          <span>Input Tape:</span>
-          <span>
-            Head: <span className="text-indigo-600 font-bold">{currentStepIndex} / {inputString.length}</span>
-          </span>
-        </div>
-
-        <div className="flex items-center gap-1 p-2 bg-slate-50 border border-slate-200 rounded-lg overflow-x-auto min-h-[52px]">
-          {inputString.length === 0 ? (
-            <div className="text-center w-full text-slate-400 font-mono text-xs py-1">
-              [ Empty String <span className="text-amber-600 font-bold">ε</span> ]
-            </div>
-          ) : (
-            inputString.split('').map((char, idx) => {
-              const isCurrent = idx === currentStepIndex - 1;
-              const isPast = idx < currentStepIndex - 1;
-
-              return (
-                <div
-                  key={idx}
-                  className={`w-8 h-9 rounded flex flex-col items-center justify-center font-mono text-xs font-bold transition-all ${
-                    isCurrent
-                      ? 'bg-indigo-600 text-white border-2 border-indigo-400 shadow-md shadow-indigo-500/20 scale-105'
-                      : isPast
-                      ? 'bg-slate-200 text-slate-600 border border-slate-300'
-                      : 'bg-white text-slate-800 border border-slate-200'
-                  }`}
-                >
-                  <span>{char}</span>
-                  <span className="text-[9px] font-normal opacity-70">{idx}</span>
-                </div>
-              );
-            })
-          )}
+      <div className={`verdict ${verdict.cls}`} role="status" aria-live="polite">
+        {verdict.icon}
+        <div>
+          <div className="verdict__title">{verdict.title}</div>
+          <div className="verdict__body">{verdict.body}</div>
         </div>
       </div>
 
-      {/* ─── Interactive Playback Controls ─── */}
-      <div className="flex items-center justify-between p-2 bg-slate-50 border border-slate-200 rounded-lg">
-        <div className="flex items-center gap-1.5">
-          {/* Play/Pause */}
-          <button
-            type="button"
-            onClick={togglePlay}
-            className={`btn-primary h-8 px-3 text-xs ${
-              isPlaying ? 'bg-amber-600 hover:bg-amber-700' : ''
-            }`}
-          >
-            {isPlaying ? (
-              <>
-                <Pause className="w-3.5 h-3.5" />
-                <span>Pause</span>
-              </>
-            ) : (
-              <>
-                <Play className="w-3.5 h-3.5 fill-current" />
-                <span>{isFinished ? 'Replay' : 'Play'}</span>
-              </>
-            )}
-          </button>
-
-          {/* Step Forward */}
-          <button
-            type="button"
-            onClick={handleStepForward}
-            disabled={isFinished || isPlaying}
-            className="btn-ghost h-8 text-xs disabled:opacity-40"
-            title="Advance 1 step"
-          >
-            <StepForward className="w-3.5 h-3.5" />
-            <span>Step</span>
-          </button>
-
-          {/* Reset */}
-          <button
-            type="button"
-            onClick={handleReset}
-            className="btn-ghost h-8 text-xs text-slate-600 hover:text-slate-900"
-            title="Rewind to start"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Reset</span>
-          </button>
-        </div>
-
-        {/* Current State Pill */}
-        <div className="text-[11px] font-mono text-slate-600">
-          State: <span className="text-indigo-700 font-bold bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded">{activeStateId ?? '—'}</span>
-        </div>
-      </div>
-
-      {/* ─── Verdict Banner ─── */}
-      {trace && (
-        <div
-          className={`p-3 rounded-lg border flex items-center justify-between transition-all ${
-            isAcceptedAtEnd
-              ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
-              : isRejectedAtEnd
-              ? 'bg-rose-50 border-rose-300 text-rose-800'
-              : 'bg-slate-50 border-slate-200 text-slate-700'
-          }`}
-        >
-          <div className="flex items-center gap-2">
-            {isAcceptedAtEnd ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-            ) : isRejectedAtEnd ? (
-              <XCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
-            ) : (
-              <div className="w-2 h-2 rounded-full bg-indigo-600 animate-pulse flex-shrink-0" />
-            )}
-
-            <div>
-              <div className="text-xs font-semibold">
-                {isAcceptedAtEnd
-                  ? 'Input Accepted'
-                  : isRejectedAtEnd
-                  ? 'Input Rejected'
-                  : 'Evaluating Tape...'}
-              </div>
-              <div className="text-[11px] opacity-80 font-mono">
-                {isAcceptedAtEnd
-                  ? `Machine halted in accepting state (${trace.finalState}).`
-                  : isRejectedAtEnd
-                  ? `Halted in non-accepting state (${trace.finalState}).`
-                  : `Currently at state ${activeStateId}. Advance step to continue.`}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ─── Trace Execution Log ─── */}
-      {trace && (
-        <div className="space-y-1.5">
-          <div className="text-[11px] font-mono text-slate-600 uppercase tracking-wider font-semibold">
-            Execution Path History
-          </div>
-          <div className="space-y-1 max-h-48 overflow-y-auto pr-1">
-            {trace.path.length === 0 ? (
-              <div className="text-[11px] font-mono text-slate-500 bg-slate-50 p-2 rounded border border-slate-200">
-                Start state: <span className="text-indigo-700 font-bold">{trace.finalState}</span> (no symbols consumed)
-              </div>
-            ) : (
-              trace.path.map((item, idx) => {
-                const isExecuted = idx < currentStepIndex;
-                const isCurrent = idx === currentStepIndex - 1;
-
-                return (
-                  <div
-                    key={idx}
-                    className={`flex items-center justify-between px-2.5 py-1.5 rounded text-xs font-mono border transition-colors ${
-                      isCurrent
-                        ? 'bg-indigo-50 border-indigo-300 text-indigo-900 font-semibold'
-                        : isExecuted
-                        ? 'bg-slate-50 border-slate-200 text-slate-700'
-                        : 'bg-white border-slate-100 text-slate-400'
-                    }`}
-                  >
-                    <span className="text-slate-400 text-[10px]">#{idx + 1}</span>
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-slate-800">{item.from}</span>
-                      <span className="text-slate-400">──(</span>
-                      <span className="text-amber-600 font-bold">{item.symbol}</span>
-                      <span className="text-slate-400">)──&gt;</span>
-                      <span className="font-semibold text-indigo-700">{item.to}</span>
-                    </div>
-                    <span className="text-[10px] text-slate-500">
-                      {isCurrent ? 'Current' : isExecuted ? 'Passed' : 'Pending'}
-                    </span>
-                  </div>
-                );
-              })
-            )}
-          </div>
-        </div>
-      )}
+      <ol className="trace" aria-label="Run so far">
+        <li data-done="true" data-current={current === 0}>
+          <span className="trace__n">0</span>
+          <span>start in {trace.labels[0]}</span>
+        </li>
+        {trace.labels.slice(1).map((label, i) => (
+          <li key={i} data-done={i + 1 <= current} data-current={i + 1 === current}>
+            <span className="trace__n">{i + 1}</span>
+            <span>
+              read <span className="trace__sym">{input[i]}</span> → {label}
+            </span>
+          </li>
+        ))}
+        {trace.stuckAt !== null && (
+          <li data-done={finished} data-current={false}>
+            <span className="trace__n">{trace.stuckAt + 1}</span>
+            <span>
+              read <span className="trace__sym">{input[trace.stuckAt]}</span> → no move, rejected
+            </span>
+          </li>
+        )}
+      </ol>
     </div>
   );
-};
+}

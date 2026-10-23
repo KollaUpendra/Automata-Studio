@@ -100,9 +100,10 @@ export function downloadFile(content: string, filename: string, mimeType: string
 export function exportGraphAsPNG(
   cy: cytoscape.Core | null,
   filename: string = 'automata.png',
+  background: string = '#ffffff',
 ): void {
-  if (!cy) return;
-  const png = cy.png({ output: 'blob', bg: '#0f1117', full: true, scale: 2 });
+  if (!cy || cy.elements().length === 0) return;
+  const png = cy.png({ output: 'blob', bg: background, full: true, scale: 2 });
   const url = URL.createObjectURL(png);
   const a = document.createElement('a');
   a.href = url;

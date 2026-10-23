@@ -1,29 +1,40 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Automata Studio — Interactive Regex, NFA, DFA & Minimization Visualizer</title>
+    <meta name="color-scheme" content="light dark" />
+    <title>Automata Studio — Regex to NFA, DFA and minimal DFA</title>
     <meta
       name="description"
-      content="An interactive educational platform for Theory of Computation. Learn regular expressions, Thompson's construction NFA, subset construction DFA, and Hopcroft's DFA minimization with interactive graph visualization."
+      content="Type a regular expression and watch it become a Thompson NFA, a subset-construction DFA and a minimal DFA. Step through input strings, inspect transition tables and see how each algorithm got there."
     />
     <meta
       name="keywords"
       content="Automata, Theory of Computation, Regular Expressions, NFA, DFA, DFA Minimization, Thompson's Construction, Subset Construction, Hopcroft Algorithm"
     />
-    <!-- Fonts -->
+    <script>
+      // Apply the saved or system theme before first paint to avoid a flash.
+      (function () {
+        var t = null;
+        try {
+          t = localStorage.getItem('automata-theme');
+        } catch (e) {}
+        if (t !== 'light' && t !== 'dark') {
+          t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+        document.documentElement.setAttribute('data-theme', t);
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap"
       rel="stylesheet"
     />
   </head>
-  <body
-    class="bg-[#0b0f19] text-slate-100 antialiased selection:bg-indigo-500/30 selection:text-indigo-200"
-  >
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
